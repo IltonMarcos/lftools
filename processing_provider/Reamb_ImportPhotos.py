@@ -46,15 +46,23 @@ import math
 import struct
 from math import pi, atan, degrees
 from qgis.PyQt.QtGui import QIcon
-from PIL import Image, TiffTags, ExifTags
-from PIL.TiffImagePlugin import ImageFileDirectory_v2
-from PIL.TiffTags import TAGS
-ImageFileDirectory_v2._load_dispatch[13] = ImageFileDirectory_v2._load_dispatch[TiffTags.LONG]
+from lftools.dependencies import ensure_pillow
 
-try:
-    from pillow_heif import register_heif_opener
-    register_heif_opener()
-except ImportError:
+# Tenta carregar o Pillow de forma segura
+Image = ensure_pillow()
+if Image:
+    from PIL import TiffTags, ExifTags
+    from PIL.TiffImagePlugin import ImageFileDirectory_v2
+    from PIL.TiffTags import TAGS
+    ImageFileDirectory_v2._load_dispatch[13] = ImageFileDirectory_v2._load_dispatch[TiffTags.LONG]
+    
+    try:
+        from pillow_heif import register_heif_opener
+        register_heif_opener()
+    except ImportError:
+        pass
+else:
+    # Se falhar, as classes dependentes de PIL podem falhar, mas o algoritmo ainda será registrado no QGIS
     pass
 
 class ImportPhotos(QgsProcessingAlgorithm):
@@ -87,28 +95,85 @@ class ImportPhotos(QgsProcessingAlgorithm):
 
     txt_en = 'Imports photos with geotag to a Point Layer.'
     txt_pt = 'Importa fotos com geotag para uma camada de pontos.'
-    figure = 'images/tutorial/reamb_geotag.jpg'
-
+    
     def shortHelpString(self):
         social_BW = Imgs().social_BW
+        figure = 'images/tutorial/reamb_geotag.jpg'
+        
+        help_en = f"""<b>{self.txt_en}</b>
+        <br><br>This tool is designed for high-precision photo import, supporting modern drone and camera metadata (EXIF/XMP).
+        <br><br><b>Main Features:</b>
+        <ul>
+        <li><b>Smart GPS:</b> Prioritizes EXIF data, with robust fallbacks to XMP (Absolute/Relative Altitude) for DNG and TIFF files.</li>
+        <li><b>Azimuth Logic:</b> Calculates orientation based on a prioritized hierarchy:
+            <ol>
+            <li>EXIF GPS Direction (Tag 17)</li>
+            <li>Calculated (vector between points)</li>
+            <li>Gimbal Yaw (DJI XMP)</li>
+            <li>Flight Yaw (Aircraft Yaw)</li>
+            </ol>
+        </li>
+        <li><b>Source Tracking:</b> Stores the origin of orientation in the <i>az_source</i> field (EXIF, CALCULATED, GIMBAL, FLIGHT).</li>
+        <li><b>DNG/TIFF Robustness:</b> Native binary parser ensures full image resolution and metadata are extracted, even when libraries only see thumbnails.</li>
+        </ul>
+        <br><b>Parameter Groups:</b>
+        <ul>
+        <li><b>Camera:</b> Sensor size, focal length, real resolution (ImgW/ImgH), and calculated FOV.</li>
+        <li><b>Exposure:</b> Photographic metadata (ISO, Aperture, Shutter, Bias).</li>
+        <li><b>Orientation:</b> Yaw, Pitch, Roll for both Flight and Gimbal, optimized for 3D displays.</li>
+        </ul>
+        <br><b>Formats:</b>
+        <ul>
+        <li>Full support: JPG, TIFF, DNG</li>
+        <li>Limited support: HEIC, RAW (CR2, ARW)</li>
+        </ul>"""
+        
+        help_pt = f"""<b>{self.txt_pt}</b>
+        <br><br>Ferramenta de alta precisão para importação de fotos, com suporte avançado a metadados EXIF/XMP de drones e câmeras modernas.
+        <br><br><b>Principais Recursos:</b>
+        <ul>
+        <li><b>GPS Inteligente:</b> Prioriza EXIF nativo, com fallbacks robustos para XMP (Altitude Absoluta/Relativa) em arquivos DNG e TIFF.</li>
+        <li><b>Lógica de Azimute:</b> Determina a orientação seguindo uma hierarquia de prioridade:
+            <ol>
+            <li>Direção GPS EXIF (Tag 17)</li>
+            <li>Calculado (vetor entre pontos sequenciais)</li>
+            <li>Gimbal Yaw (Dados DJI XMP)</li>
+            <li>Flight Yaw (Guinada da Aeronave)</li>
+            </ol>
+        </li>
+        <li><b>Rastreio de Origem:</b> Registra a origem da orientação no campo <i>az_source</i> (EXIF, CALCULATED, GIMBAL, FLIGHT).</li>
+        <li><b>Robustez DNG/TIFF:</b> Parser binário nativo garante a extração da resolução real e metadados, mesmo quando miniaturas são detectadas.</li>
+        </ul>
+        <br><b>Grupos de Parâmetros:</b>
+        <ul>
+        <li><b>Câmera:</b> Tamanho do sensor, distância focal, resolução real (ImgW/ImgH) e FOV calculado.</li>
+        <li><b>Exposição:</b> Metadados fotográficos (ISO, Abertura, Obturação, Compensação).</li>
+        <li><b>Orientação:</b> Yaw, Pitch, Roll (Voo e Gimbal), otimizados para visualização 3D.</li>
+        </ul>
+        <br><b>Formatos:</b>
+        <ul>
+        <li>Suporte total: JPG, TIFF, DNG</li>
+        <li>Suporte limitado: HEIC, RAW (CR2, ARW)</li>
+        </ul>"""
+
         footer = '''<div align="center">
-                      <img src="'''+ os.path.join(os.path.dirname(os.path.dirname(__file__)), self.figure) +'''">
+                      <img src="'''+ os.path.join(os.path.dirname(os.path.dirname(__file__)), figure) +'''">
                       </div>
                       <div align="right">
                       <p align="right">
                       <b>'''+self.tr('Author: Leandro Franca', 'Autor: Leandro França')+'''</b>
                       </p>'''+ social_BW + '''</div>
                     </div>'''
-        return self.tr(self.txt_en, self.txt_pt) + footer
+        return self.tr(help_en, help_pt) + footer
 
     FOLDER = 'FOLDER'
     NONGEO = 'NONGEO'
     OUTPUT = 'OUTPUT'
     SUBFOLDER = 'SUBFOLDER'
     AZIMUTH = 'AZIMUTH'
-    SENSOR = 'SENSOR'
-    GEOMETRY = 'GEOMETRY'
-    PHOTOMETRY = 'PHOTOMETRY'
+    CAMERA = 'CAMERA'
+    ORIENTATION = 'ORIENTATION'
+    EXPOSURE = 'EXPOSURE'
     STYLE = 'STYLE'
 
     def initAlgorithm(self, config=None):
@@ -130,6 +195,19 @@ class ImportPhotos(QgsProcessingAlgorithm):
             )
         )
 
+        STYLES = [self.tr('Simple Camera', 'Camera simples'),
+                  self.tr('Drone'),
+                  self.tr('VR Photo 360°', 'RV Foto 360°') ]
+
+        self.addParameter(
+            QgsProcessingParameterEnum(
+                self.STYLE,
+                self.tr('Layer Style', 'Estilo da camada'),
+				options = STYLES,
+                defaultValue= 0
+            )
+        )
+
         self.addParameter(
             QgsProcessingParameterBoolean(
                 self.AZIMUTH,
@@ -140,24 +218,24 @@ class ImportPhotos(QgsProcessingAlgorithm):
 
         self.addParameter(
             QgsProcessingParameterBoolean(
-                self.SENSOR,
-                self.tr('Sensor'),
+                self.CAMERA,
+                self.tr('Camera (sensor, lens, resolution)', 'Câmera (sensor, lente, resolução)'),
                 defaultValue = True
             )
         )
 
         self.addParameter(
             QgsProcessingParameterBoolean(
-                self.GEOMETRY,
-                self.tr('Geometry', 'Geometria'),
+                self.ORIENTATION,
+                self.tr('Orientation (yaw, pitch, roll)', 'Orientação (yaw, pitch, roll)'),
                 defaultValue = True
             )
         )
 
         self.addParameter(
             QgsProcessingParameterBoolean(
-                self.PHOTOMETRY,
-                self.tr('Photometry', 'Fotometria'),
+                self.EXPOSURE,
+                self.tr('Exposure (ISO, aperture, shutter speed)', 'Exposição (ISO, abertura, obturação)'),
                 defaultValue = True
             )
         )
@@ -172,18 +250,6 @@ class ImportPhotos(QgsProcessingAlgorithm):
             )
         )
 
-        STYLES = [self.tr('Simple Camera', 'Camera simples'),
-                  self.tr('Drone'),
-                  self.tr('VR Photo 360°', 'RV Foto 360°') ]
-
-        self.addParameter(
-            QgsProcessingParameterEnum(
-                self.STYLE,
-                self.tr('Layer Style', 'Estilo da camada'),
-				options = STYLES,
-                defaultValue= 0
-            )
-        )
 
         self.addParameter(
             QgsProcessingParameterFeatureSink(
@@ -217,21 +283,21 @@ class ImportPhotos(QgsProcessingAlgorithm):
         if CalcAz:
             Atributos = []
 
-        InSensor = self.parameterAsBool(
+        InCamera = self.parameterAsBool(
             parameters,
-            self.SENSOR,
+            self.CAMERA,
             context
         )
 
-        InGeometria = self.parameterAsBool(
+        InOrientacao = self.parameterAsBool(
             parameters,
-            self.GEOMETRY,
+            self.ORIENTATION,
             context
         )
 
-        InFotometria = self.parameterAsBool(
+        InExposição = self.parameterAsBool(
             parameters,
-            self.PHOTOMETRY,
+            self.EXPOSURE,
             context
         )
 
@@ -242,79 +308,25 @@ class ImportPhotos(QgsProcessingAlgorithm):
         )
 
         feedback.pushInfo(self.tr('Checking files in the folder...', 'Checando arquivos na pasta...'))
+        
+        # Formatos: Prioridade e Limitados (Instruction 5 & 23)
+        ext_full = ('.jpg', '.jpeg', '.tif', '.tiff', '.dng', '.heic', '.heif', '.cr2', '.arw')
+        
         lista = []
         if subpasta:
             for root, dirs, files in os.walk(pasta, topdown=True):
                 for name in files:
-                    if (name).lower().endswith(('.jpg', '.jpeg', '.tif', '.tiff', '.dng', '.png', '.bmp', '.webp', '.cr2', '.arw', '.heic', '.heif')):
+                    if (name).lower().endswith(ext_full):
                         lista += [os.path.join(root, name)]
         else:
             for item in os.listdir(pasta):
-                if (item).lower().endswith(('.jpg', '.jpeg', '.tif', '.tiff', '.dng', '.png', '.bmp', '.webp', '.cr2', '.arw', '.heic', '.heif')):
+                if (item).lower().endswith(ext_full):
                     lista += [os.path.join(pasta, item)]
 
         tam = len(lista)
         copy_ngeo = False
         if os.path.isdir(fotos_nao_geo):
             copy_ngeo = True
-
-        # Funcao para transformar os dados do EXIF em coordenadas em graus decimais
-        def coordenadas(exif):
-            try:
-                ref_lat = exif['GPSInfo'][1][0]
-                ref_lon = exif['GPSInfo'][3][0]
-                sinal_lat, sinal_lon = 0, 0
-                if ref_lat == 'S':
-                    sinal_lat = -1
-                elif ref_lat == 'N':
-                    sinal_lat = 1
-                if ref_lon == 'W':
-                    sinal_lon = -1
-                elif ref_lon == 'E':
-                    sinal_lon = 1
-
-                try:
-                    grausLat,grausLon = exif['GPSInfo'][2][0][0], exif['GPSInfo'][4][0][0]
-                    minLat, minLon = exif['GPSInfo'][2][1][0], exif['GPSInfo'][4][1][0]
-                    segLat = exif['GPSInfo'][2][2][0]/float(exif['GPSInfo'][2][2][1])
-                    segLon = exif['GPSInfo'][4][2][0]/float(exif['GPSInfo'][4][2][1])
-                except:
-                    grausLat,grausLon = exif['GPSInfo'][2][0], exif['GPSInfo'][4][0]
-                    minLat, minLon = exif['GPSInfo'][2][1], exif['GPSInfo'][4][1]
-                    segLat = exif['GPSInfo'][2][2]
-                    segLon = exif['GPSInfo'][4][2]
-                if sinal_lat!=0 and sinal_lon!=0:
-                    lat = sinal_lat*(float(grausLat)+minLat/60.0+segLat/3600.0)
-                    lon = sinal_lon*(float(grausLon)+minLon/60.0+segLon/3600.0)
-                return lat, lon
-            except:
-                return 0,0
-
-        # Funcao para pegar Azimute
-        def azimute(exif):
-            Az = exif['GPSInfo'][17]
-            if isinstance(Az, tuple):
-                Az = Az[0]/float(Az[1])
-                return Az
-            else:
-                return Az
-
-        # Funcao para gerar o padrao data-hora
-        def data_hora(texto):
-            data_hora = texto.replace(' ',':').replace('-',':')
-            data_hora = data_hora.split(':')
-            ano = int(data_hora[0])
-            mes = int(data_hora[1])
-            dia = int(data_hora[2])
-            hora = int(data_hora[3])
-            minuto = int(data_hora[4])
-            segundo = int(data_hora[5])
-            data_hora = unicode(datetime.datetime(ano, mes, dia, hora, minuto, segundo))
-            return data_hora
-        
-        # Mensagem de erro
-        def erro_msg(arquivo):
-            return self.tr('The file "{}" has no geotag!'.format(arquivo), 'A imagem "{}" não possui geotag!'.format(arquivo)) 
 
         # Criando Output
         crs = QgsCoordinateReferenceSystem('EPSG:4326')
@@ -324,27 +336,27 @@ class ImportPhotos(QgsProcessingAlgorithm):
         fields.append(QgsField(self.tr('latitude'), QVariant.Double))
         fields.append(QgsField(self.tr('altitude'), QVariant.Double))
         fields.append(QgsField(self.tr('azimuth'), QVariant.Double))
+        fields.append(QgsField(self.tr('az_source'), QVariant.String))
         fields.append(QgsField(self.tr('date_time'), QVariant.String))
         fields.append(QgsField(self.tr('path'), QVariant.String))
         
-        if InSensor:
+        if InCamera:
             fields.append(QgsField(self.tr('make','fabricante'), QVariant.String))
             fields.append(QgsField(self.tr('model','modelo'), QVariant.String))
             fields.append(QgsField(self.tr('dimensions','dimensões'), QVariant.String))
             fields.append(QgsField(self.tr('FOV'), QVariant.Double))
             fields.append(QgsField(self.tr('SensorSize'), QVariant.String))
             fields.append(QgsField('FocalLen', QVariant.Double))
-            fields.append(QgsField('SensW', QVariant.Double))
             fields.append(QgsField('ImgW', QVariant.Int))
             fields.append(QgsField('ImgH', QVariant.Int))
 
-        if InFotometria:
+        if InExposição:
             fields.append(QgsField(self.tr('iso'), QVariant.String))
             fields.append(QgsField(self.tr('exposure_bias','exp_bias'), QVariant.String))
             fields.append(QgsField(self.tr('aperture','abertura'), QVariant.String))
             fields.append(QgsField(self.tr('shutter_speed','obturação'), QVariant.String))
 
-        if InGeometria:
+        if InOrientacao:
             fields.append(QgsField(self.tr('FlightYaw'), QVariant.Double))
             fields.append(QgsField(self.tr('FlightPitch'), QVariant.Double))
             fields.append(QgsField(self.tr('FlightRoll'), QVariant.Double))
@@ -416,9 +428,9 @@ class ImportPhotos(QgsProcessingAlgorithm):
 
                 # 3. GPS (Fallback/Prioridade XMP se EXIF falhar)
                 if 'GPSInfo' in exif:
-                    lat, lon = coordenadas(exif)
+                    lat, lon = self._coordenadas_exif(exif)
                     if 17 in exif['GPSInfo']:
-                        Az = float(azimute(exif))
+                        Az = float(self._azimute_exif(exif))
                     if 6 in exif['GPSInfo']:
                         try:
                             altitude = float(exif['GPSInfo'][6][0])/exif['GPSInfo'][6][1]
@@ -447,9 +459,9 @@ class ImportPhotos(QgsProcessingAlgorithm):
 
                 # 5. Data e Hora
                 if 'DateTimeOriginal' in exif:
-                    date_time = data_hora(exif['DateTimeOriginal'])
+                    date_time = self._data_hora_format(exif['DateTimeOriginal'])
                 elif 'DateTime' in exif:
-                    date_time = data_hora(exif['DateTime'])
+                    date_time = self._data_hora_format(exif['DateTime'])
 
                 if 'Make' in exif:
                     fabricante = str(exif['Make'].replace('\x00', ''))
@@ -462,12 +474,19 @@ class ImportPhotos(QgsProcessingAlgorithm):
                     modelo = ''
 
                 if lon != 0:
-                    # Fallback para Azimute
-                    if Az is None:
+                    # Lógica de Azimute e Fonte
+                    az_source = None
+                    if Az is not None:
+                        az_source = 'EXIF'
+                    elif CalcAz:
+                        az_source = 'CALCULATED' # Será preenchido depois
+                    elif InOrientacao:
                         if GimbalYaw is not None:
                             Az = GimbalYaw
+                            az_source = 'GIMBAL'
                         elif FlightYaw is not None:
                             Az = FlightYaw
+                            az_source = 'FLIGHT'
 
                     if not CalcAz:
                         feature = QgsFeature(fields)
@@ -475,39 +494,37 @@ class ImportPhotos(QgsProcessingAlgorithm):
                         
                         # Atributos Automáticos
                         # Usar casting explícito para evitar erros de conversão no QGIS 4.0 (Qt 6)
-                        att = [arquivo, float(lon), float(lat), float(altitude) if altitude is not None else 0.0, float(Az) if Az is not None else 0.0, date_time, filepath]
+                        att = [arquivo, float(lon), float(lat), float(altitude) if altitude is not None else 0.0, float(Az) if Az is not None else None, az_source, date_time, filepath]
                         
                         # Categorias
-                        if InSensor:
+                        if InCamera:
                             # FOV, focal_len e sens_w devem ser float. img_w e img_h devem ser int.
                             att += [fabricante, modelo, dimensions, 
                                     float(FOV) if FOV is not None else None, 
                                     SensorSize, 
                                     float(focal_len) if focal_len is not None else None, 
-                                    float(sens_w) if sens_w is not None else None, 
                                     int(img_w) if img_w is not None else None, 
                                     int(img_h) if img_h is not None else None]
-                        if InFotometria:
+                        if InExposição:
                             att += [iso_str, exp_str, fnum_str, obt_str]
-                        if InGeometria:
+                        if InOrientacao:
                             # Todos os ângulos devem ser float
                             att += [float(val) if val is not None else None for val in [FlightYaw, FlightPitch, FlightRoll, GimbalYaw, GimbalPitch, GimbalRoll]]
                             
                         feature.setAttributes(att)
                         sink.addFeature(feature, QgsFeatureSink.FastInsert)
                     else:
-                        att = [arquivo, float(lon), float(lat), float(altitude) if altitude is not None else 0.0, float(Az) if Az is not None else 0.0, date_time, filepath]
-                        if InSensor:
+                        att = [arquivo, float(lon), float(lat), float(altitude) if altitude is not None else 0.0, float(Az) if Az is not None else None, az_source, date_time, filepath]
+                        if InCamera:
                             att += [fabricante, modelo, dimensions, 
                                     float(FOV) if FOV is not None else None, 
                                     SensorSize, 
                                     float(focal_len) if focal_len is not None else None, 
-                                    float(sens_w) if sens_w is not None else None, 
                                     int(img_w) if img_w is not None else None, 
                                     int(img_h) if img_h is not None else None]
-                        if InFotometria:
+                        if InExposição:
                             att += [iso_str, exp_str, fnum_str, obt_str]
-                        if InGeometria:
+                        if InOrientacao:
                             att += [float(val) if val is not None else None for val in [FlightYaw, FlightPitch, FlightRoll, GimbalYaw, GimbalPitch, GimbalRoll]]
                         Atributos += [att]
                 else:
@@ -550,22 +567,23 @@ class ImportPhotos(QgsProcessingAlgorithm):
                 if 'GPSLatitudeRef' in tags:
                     try:
                         lat_ref = str(tags['GPSLatitudeRef'])
-                        lat_val = eval(str(tags['GPSLatitude']))
+                        # Usando parsing explicito em vez de eval()
+                        lat_val = self._safe_rational_eval(tags['GPSLatitude'])
                         lat = (-1 if lat_ref.upper() == 'S' else 1)*(float(lat_val[0]) + float(lat_val[1])/60 + float(lat_val[2])/3600)
                         
                         lon_ref = str(tags['GPSLongitudeRef'])
-                        lon_val = eval(str(tags['GPSLongitude']))
-                        lon = (-1 if lon_ref.upper() == 'W' else 1)*(float(lon_val[0]) + float(lon_val[1])/60 + float(lon_val[2])/3060) # Wait, typing error in 3600? fixed below
+                        lon_val = self._safe_rational_eval(tags['GPSLongitude'])
                         lon = (-1 if lon_ref.upper() == 'W' else 1)*(float(lon_val[0]) + float(lon_val[1])/60 + float(lon_val[2])/3600)
                         
-                        alt_val = eval(str(tags['GPSAltitude']))
+                        alt_val = self._safe_rational_eval(tags['GPSAltitude'])
                         altitude = float(alt_val[0])/alt_val[1] if alt_val[1] != 0 else float(alt_val[0])
                         
                         # Extração de Azimute do GPS (tag 17)
                         if 'GPSImgDirection' in tags:
-                            az_val = eval(str(tags['GPSImgDirection']))
+                            az_val = self._safe_rational_eval(tags['GPSImgDirection'])
                             Az = float(az_val[0])/az_val[1] if az_val[1] != 0 else float(az_val[0])
-                    except:
+                    except Exception as e:
+                        feedback.reportError(f"Error parsing GPS TIFF tags: {e}")
                         pass
 
                     # Data e Hora
@@ -573,7 +591,7 @@ class ImportPhotos(QgsProcessingAlgorithm):
                         if tag_date in meta_dict:
                             val = meta_dict[tag_date]
                             if isinstance(val, (tuple, list)): val = val[0]
-                            date_time = data_hora(str(val))
+                            date_time = self._data_hora_format(str(val))
                             break
 
                     if 'Make' in meta_dict:
@@ -627,55 +645,60 @@ class ImportPhotos(QgsProcessingAlgorithm):
                             else:
                                 obt_str = f"{round(xmp_obt, 1)}s"
                         
-                        # Fallback para Azimute
-                        if Az is None:
+                        # Lógica de Azimute e Fonte
+                        az_source = None
+                        if Az is not None:
+                            az_source = 'EXIF'
+                        elif CalcAz:
+                            az_source = 'CALCULATED' # Será preenchido depois
+                        elif InOrientacao:
                             if GimbalYaw is not None:
                                 Az = GimbalYaw
+                                az_source = 'GIMBAL'
                             elif FlightYaw is not None:
                                 Az = FlightYaw
+                                az_source = 'FLIGHT'
 
                         if not CalcAz:
                             feature = QgsFeature(fields)
                             feature.setGeometry(QgsGeometry(QgsPoint(lon, lat, altitude if altitude != None else 0)))
                             
                             # Atributos Automáticos
-                            att = [arquivo, float(lon), float(lat), float(altitude) if altitude is not None else 0.0, float(Az) if Az is not None else 0.0, date_time, filepath]
+                            att = [arquivo, float(lon), float(lat), float(altitude) if altitude is not None else 0.0, float(Az) if Az is not None else None, az_source, date_time, filepath]
                             
                             # Categorias
-                            if InSensor:
+                            if InCamera:
                                 att += [fabricante, modelo, dimensions, 
                                         float(FOV) if FOV is not None else None, 
                                         SensorSize, 
                                         float(focal_len) if focal_len is not None else None, 
-                                        float(sens_w) if sens_w is not None else None, 
                                         int(img_w) if img_w is not None else None, 
                                         int(img_h) if img_h is not None else None]
-                            if InFotometria:
+                            if InExposição:
                                 att += [iso_str, exp_str, fnum_str, obt_str]
-                            if InGeometria:
+                            if InOrientacao:
                                 att += [float(val) if val is not None else None for val in [FlightYaw, FlightPitch, FlightRoll, GimbalYaw, GimbalPitch, GimbalRoll]]
                                 
                             feature.setAttributes(att)
                             sink.addFeature(feature, QgsFeatureSink.FastInsert)
                         else:
-                            att = [arquivo, float(lon), float(lat), float(altitude) if altitude is not None else 0.0, float(Az) if Az is not None else 0.0, date_time, filepath]
-                            if InSensor:
+                            att = [arquivo, float(lon), float(lat), float(altitude) if altitude is not None else 0.0, float(Az) if Az is not None else None, az_source, date_time, filepath]
+                            if InCamera:
                                 att += [fabricante, modelo, dimensions, 
                                         float(FOV) if FOV is not None else None, 
                                         SensorSize, 
                                         float(focal_len) if focal_len is not None else None, 
-                                        float(sens_w) if sens_w is not None else None, 
                                         int(img_w) if img_w is not None else None, 
                                         int(img_h) if img_h is not None else None]
-                            if InFotometria:
+                            if InExposição:
                                 att += [iso_str, exp_str, fnum_str, obt_str]
-                            if InGeometria:
+                            if InOrientacao:
                                 att += [float(val) if val is not None else None for val in [FlightYaw, FlightPitch, FlightRoll, GimbalYaw, GimbalPitch, GimbalRoll]]
                             Atributos += [att]
                     else:
-                        feedback.reportError(erro_msg(arquivo))
+                        feedback.reportError(self._erro_msg(arquivo))
                 else:
-                    feedback.reportError(erro_msg(arquivo))
+                    feedback.reportError(self._erro_msg(arquivo))
                     if copy_ngeo:
                         shutil.copy2(os.path.join(pasta, arquivo), os.path.join(fotos_nao_geo, arquivo))
                 img.close()
@@ -694,9 +717,11 @@ class ImportPhotos(QgsProcessingAlgorithm):
                     # Apenas atualiza se os pontos não forem coincidentes
                     Az = round(180*res_az/pi, 1)
                     Atributos[k][4] = Az
+                    Atributos[k][5] = 'CALCULATED'
             # O último ponto mantém o azimute do penúltimo ou o seu próprio gimbal
             if len(Atributos) > 1:
                 Atributos[-1][4] = Atributos[-2][4]
+                Atributos[-1][5] = Atributos[-2][5]
 
             # Criar feições
             for att in Atributos:
@@ -721,6 +746,7 @@ class ImportPhotos(QgsProcessingAlgorithm):
         return {self.OUTPUT: dest_id}
     
     
+
     def _read_tiff_ifd(self, f, offset, endian, name="IFD", depth=0, results=None):
         """Metodo auxiliar para ler IFDs recursivamente em arquivos TIFF/DNG"""
         if depth > 5 or results is None: return
@@ -1011,6 +1037,7 @@ class ImportPhotos(QgsProcessingAlgorithm):
         except Exception as e:
             return None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None
 
+
         
 
     def postProcessAlgorithm(self, context, feedback):
@@ -1030,3 +1057,72 @@ class ImportPhotos(QgsProcessingAlgorithm):
         layer.triggerRepaint() 
 
         return {self.OUTPUT: self.SAIDA}
+
+    def _coordenadas_exif(self, exif):
+        """Transforma os dados do EXIF em coordenadas em graus decimais"""
+        try:
+            gps_info = exif.get('GPSInfo', {})
+            ref_lat = gps_info.get(1)
+            ref_lon = gps_info.get(3)
+            
+            sinal_lat = -1 if ref_lat == 'S' else 1 if ref_lat == 'N' else 0
+            sinal_lon = -1 if ref_lon == 'W' else 1 if ref_lon == 'E' else 0
+
+            lat_val = gps_info.get(2)
+            lon_val = gps_info.get(4)
+            
+            def parse_gps_rational(val):
+                if isinstance(val[0], tuple): # Antigo formato Pillow
+                    d = float(val[0][0]) / val[0][1]
+                    m = float(val[1][0]) / val[1][1]
+                    s = float(val[2][0]) / val[2][1]
+                else: # Formato novo
+                    d, m, s = float(val[0]), float(val[1]), float(val[2])
+                return d + m/60.0 + s/3600.0
+
+            if sinal_lat != 0 and sinal_lon != 0:
+                lat = sinal_lat * parse_gps_rational(lat_val)
+                lon = sinal_lon * parse_gps_rational(lon_val)
+                return lat, lon
+            return 0, 0
+        except:
+            return 0, 0
+
+    def _azimute_exif(self, exif):
+        """Pega Azimute do EXIF"""
+        try:
+            Az = exif['GPSInfo'][17]
+            if isinstance(Az, (tuple, list)):
+                return Az[0]/float(Az[1]) if Az[1] != 0 else float(Az[0])
+            return float(Az)
+        except:
+            return None
+
+    def _data_hora_format(self, texto):
+        """Gera o padrao data-hora"""
+        try:
+            data_hora = texto.replace(' ',':').replace('-',':')
+            data_hora = data_hora.split(':')
+            ano, mes, dia, hora, minuto, segundo = map(int, data_hora[:6])
+            return str(datetime.datetime(ano, mes, dia, hora, minuto, segundo))
+        except:
+            return texto
+    
+    def _erro_msg(self, arquivo):
+        """Mensagem de erro traduzida"""
+        return self.tr(f'The file "{arquivo}" has no geotag!', f'A imagem "{arquivo}" não possui geotag!')
+
+    def _safe_rational_eval(self, val_str):
+        """Converte strings de racionais TIFF '(num, den), ...' em lista de floats de forma segura"""
+        try:
+            # Tenta limpar e extrair numeros
+            # Ex: "((23, 1), (34, 1), (1234, 100))"
+            numbers = re.findall(r'(\d+)', str(val_str))
+            res = []
+            for i in range(0, len(numbers), 2):
+                num = int(numbers[i])
+                den = int(numbers[i+1]) if i+1 < len(numbers) else 1
+                res.append(num / den if den != 0 else num)
+            return res
+        except:
+            return [0, 1]
