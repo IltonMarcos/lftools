@@ -15,7 +15,6 @@ repository=https://github.com/LEOXINGU/lftools
 hasProcessingProvider=yes
 # Uncomment the following line and add your changelog:
 # changelog=
-  2.10.0 - Added new tool "Light Geometry Cleanup" to remove null/empty geometries and duplicate vertices.
   2.9.4 - Adaptation of the drone style to ensure compatibility with Litchi’s CSV layer, and replacement of the pyproj library with a solution based on QgsEllipsoidUtils.
   2.9.3 - Added automatic Pillow (PIL) dependency installation for macOS.
   2.9.2 - adaptation of the plugin for QGIS 4.0 and improvements to the NMEA to layer tool.
